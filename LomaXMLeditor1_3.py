@@ -8,6 +8,27 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk, PanedWindow
 import xml.etree.ElementTree as ET
 
+class NewElementDialog(tk.simpledialog.Dialog):
+    def body(self, master):
+        tk.Label(master, text="Select tag:").grid(row=0)
+        tk.Label(master, text="Enter text:").grid(row=1)
+
+        self.tag_var = tk.StringVar(master)
+        self.tag_combo = ttk.Combobox(master, textvariable=self.tag_var, width=70)  # Increased width
+        self.tag_combo['values'] = list(existing_tags)
+        self.tag_combo.grid(row=0, column=1)
+        self.text_var = tk.StringVar(master)
+        self.text_entry = tk.Entry(master, textvariable=self.text_var, width=70)
+        self.text_entry.grid(row=1, column=1)
+
+        return self.tag_combo  # initial focus
+
+    def apply(self):
+        tag = self.tag_var.get()
+        text = self.text_var.get()
+        self.result = (tag, text)
+
+
 def browse_file():
     filename = filedialog.askopenfilename(filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
     if filename:
@@ -19,7 +40,13 @@ def browse_file():
         global xml_tree
         xml_tree = tree
 
+existing_tags = []
+
 def populate_treeview(element, parent, text_pos=0):
+    # Add the tag to existing_tags if it's not already in the list
+    if element.tag not in existing_tags:
+        existing_tags.append(element.tag)
+
     node_id = treeview.insert(parent, 'end', text=element.tag, open=True)
     if element.text:
         text = element.text.strip()
@@ -86,6 +113,25 @@ def on_tree_select(event):
         text_output.tag_add('sel', f'1.0+{start_pos}c', f'1.0+{end_pos}c')
         text_output.see(f'1.0+{start_pos}c')
 
+def add_new_element():
+    dialog = NewElementDialog(root)
+    result = dialog.result
+
+    if result:
+        new_tag, new_text = result
+        if new_tag and new_text:
+            insert_new_element(new_tag, new_text)
+            
+def insert_new_element(tag, text):
+    selected_item = treeview.selection()
+    if selected_item:
+        parent_id = selected_item[0]
+    else:
+        parent_id = ''  # Insert at the root if no selection
+
+    new_node_id = treeview.insert(parent_id, 'end', text=tag, open=True)
+    treeview.insert(new_node_id, 'end', text=text, tags=('text',))
+
 # Set up the main window
 root = tk.Tk()
 root.title("XML Tree Editor")
@@ -96,8 +142,8 @@ paned_window.pack(fill=tk.BOTH, expand=True)
 
 # Create a treeview in the left pane
 treeview = ttk.Treeview(paned_window)
-treeview.bind('<<TreeviewSelect>>', on_tree_select)  # Bind selection event
-paned_window.add(treeview, width=200)
+treeview.bind('<<TreeviewSelect>>', on_tree_select)
+paned_window.add(treeview, width=300)
 
 # Create a scrollbar for the treeview
 scrollbar_treeview = ttk.Scrollbar(treeview, orient="vertical", command=treeview.yview)
@@ -129,10 +175,11 @@ browse_button = tk.Button(button_frame, text="Browse XML File", command=browse_f
 browse_button.pack(side=tk.LEFT)
 edit_button = tk.Button(button_frame, text="Edit Node", command=edit_node)
 edit_button.pack(side=tk.LEFT)
+add_element_button = tk.Button(button_frame, text="Add New Element", command=add_new_element)
+add_element_button.pack(side=tk.LEFT)
 save_button = tk.Button(button_frame, text="Save XML File", command=save_file)
 save_button.pack(side=tk.RIGHT)
 
 text_positions = {}  # Global dictionary to map treeview text to positions in text_output
 
 root.mainloop()
-
