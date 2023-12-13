@@ -14,11 +14,11 @@ class NewElementDialog(tk.simpledialog.Dialog):
         tk.Label(master, text="Enter text:").grid(row=1)
 
         self.tag_var = tk.StringVar(master)
-        self.tag_combo = ttk.Combobox(master, textvariable=self.tag_var, width=70)  # Increased width
+        self.tag_combo = ttk.Combobox(master, textvariable=self.tag_var, width=50)
         self.tag_combo['values'] = list(existing_tags)
         self.tag_combo.grid(row=0, column=1)
         self.text_var = tk.StringVar(master)
-        self.text_entry = tk.Entry(master, textvariable=self.text_var, width=70)
+        self.text_entry = tk.Entry(master, textvariable=self.text_var, width=50)
         self.text_entry.grid(row=1, column=1)
 
         return self.tag_combo  # initial focus
@@ -28,38 +28,61 @@ class NewElementDialog(tk.simpledialog.Dialog):
         text = self.text_var.get()
         self.result = (tag, text)
 
+def add_new_element():
+    tag_selection = list(existing_tags)
+    if not tag_selection:
+        messagebox.showinfo("Info", "No existing tags to base the new element on.")
+        return
+
+    dialog = NewElementDialog(root)
+    result = dialog.result
+
+    if result:
+        new_tag, new_text = result
+        if new_tag and new_text:
+            insert_new_element(new_tag, new_text)
+
+def insert_new_element(tag, text):
+    selected_item = treeview.selection()
+    parent_id = selected_item[0] if selected_item else ''
+    new_node_id = treeview.insert(parent_id, 'end', text=tag, open=True)
+    treeview.insert(new_node_id, 'end', text=text, tags=('text',))
+    treeview_to_xml_mapping[new_node_id] = ET.Element(tag, text=text)
+    update_text_output(xml_tree.getroot())
 
 def browse_file():
     filename = filedialog.askopenfilename(filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
     if filename:
+        global xml_tree
         tree = ET.parse(filename)
+        xml_tree = tree
         root = tree.getroot()
         clear_treeview()
         populate_treeview(root, '')
         update_text_output(root)
-        global xml_tree
-        xml_tree = tree
 
-existing_tags = []
+existing_tags = set()
+text_positions = {}  # Global dictionary to map treeview text to positions in text_output
+treeview_to_xml_mapping = {}
 
-def populate_treeview(element, parent, text_pos=0):
-    # Add the tag to existing_tags if it's not already in the list
-    if element.tag not in existing_tags:
-        existing_tags.append(element.tag)
+def populate_treeview(element, parent, text_pos=0, depth=0):
+    node_id = treeview.insert(parent, 'end', text=element.tag, open=depth < 1)
+    treeview_to_xml_mapping[node_id] = element
+    existing_tags.add(element.tag)
 
-    node_id = treeview.insert(parent, 'end', text=element.tag, open=True)
     if element.text:
         text = element.text.strip()
-        if text:
-            text_id = treeview.insert(node_id, 'end', text=text)
-            treeview.item(text_id, tags=('text',))
-            text_positions[text_id] = (text_pos, text_pos + len(text))
-            text_pos += len(text)
+        text_id = treeview.insert(node_id, 'end', text=text, tags=('text',))
+        start_pos = f'1.0+{text_pos}c'
+        end_pos = f'1.0+{text_pos + len(text)}c'
+        text_positions[text_id] = (start_pos, end_pos)
+        text_pos += len(text) + 1
 
     for child in element:
-        text_pos = populate_treeview(child, node_id, text_pos)
+        child_id = populate_treeview(child, node_id, text_pos, depth + 1)
+        treeview_to_xml_mapping[child_id] = child
 
-    return text_pos
+    return node_id
 
 def update_text_output(element):
     text_output.delete(1.0, tk.END)
@@ -77,60 +100,56 @@ def append_text_output(element, depth=0):
 def clear_treeview():
     for item in treeview.get_children():
         treeview.delete(item)
+    treeview_to_xml_mapping.clear()
+
+def update_xml_element_from_treeview(item_id, new_text):
+    # Find the corresponding XML element
+    for elem in xml_tree.getroot().iter():
+        if elem.tag == treeview.item(item_id, "text"):
+            elem.text = new_text
+            break
 
 def edit_node():
     selected_item = treeview.selection()
     if selected_item:
-        text = simpledialog.askstring("Edit text", "Enter text:", initialvalue=treeview.item(selected_item[0], 'text'))
-        if text is not None:
-            treeview.item(selected_item[0], text=text)
+        item_id = selected_item[0]
+        current_text = treeview.item(item_id, 'text')
+        new_text = simpledialog.askstring("Edit text", "Enter new text:", initialvalue=current_text)
+        if new_text and new_text != current_text:
+            treeview.item(item_id, text=new_text)
+            update_xml_element_from_treeview(item_id, new_text)
             update_text_output(xml_tree.getroot())
+
+def sync_treeview_to_xml(treeview_item_id, xml_parent_element):
+    for child_id in treeview.get_children(treeview_item_id):
+        child_tag = treeview.item(child_id, "text")
+        child_element = ET.SubElement(xml_parent_element, child_tag)
+        sync_treeview_to_xml(child_id, child_element)
 
 def save_file():
     try:
-        root = rebuild_tree('', xml_tree.getroot())
-        xml_tree._setroot(root)
-        xml_tree.write('modified.xml')
-        messagebox.showinfo("Success", "File saved successfully")
+        # Clear the existing XML tree and rebuild it from the treeview
+        root_element = xml_tree.getroot()
+        root_element.clear()
+        sync_treeview_to_xml("", root_element)
+
+        save_path = filedialog.asksaveasfilename(defaultextension=".xml",
+                                                 filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
+        if save_path:
+            xml_tree.write(save_path)
+            messagebox.showinfo("Success", f"File saved successfully to {save_path}")
     except Exception as e:
         messagebox.showerror("Error", f"Error saving file: {e}")
 
-def rebuild_tree(parent_id, element):
-    new_element = ET.Element(treeview.item(parent_id, 'text'))
-    for child_id in treeview.get_children(parent_id):
-        child_text = treeview.item(child_id, 'text')
-        if child_text.startswith('text: '):
-            new_element.text = child_text[6:]
-        else:
-            new_element.append(rebuild_tree(child_id, element))
-    return new_element
-
 def on_tree_select(event):
     selected_items = treeview.selection()
-    if selected_items and treeview.item(selected_items[0], 'tags'):
-        start_pos, end_pos = text_positions.get(selected_items[0], (0, 0))
-        text_output.tag_remove('sel', '1.0', tk.END)
-        text_output.tag_add('sel', f'1.0+{start_pos}c', f'1.0+{end_pos}c')
-        text_output.see(f'1.0+{start_pos}c')
-
-def add_new_element():
-    dialog = NewElementDialog(root)
-    result = dialog.result
-
-    if result:
-        new_tag, new_text = result
-        if new_tag and new_text:
-            insert_new_element(new_tag, new_text)
-            
-def insert_new_element(tag, text):
-    selected_item = treeview.selection()
-    if selected_item:
-        parent_id = selected_item[0]
-    else:
-        parent_id = ''  # Insert at the root if no selection
-
-    new_node_id = treeview.insert(parent_id, 'end', text=tag, open=True)
-    treeview.insert(new_node_id, 'end', text=text, tags=('text',))
+    if selected_items:
+        selected_item = selected_items[0]
+        if 'text' in treeview.item(selected_item, 'tags'):
+            start_pos, end_pos = text_positions.get(selected_item, ('1.0', '1.0'))
+            text_output.tag_remove('sel', '1.0', tk.END)
+            text_output.tag_add('sel', start_pos, end_pos)
+            text_output.see(start_pos)
 
 # Set up the main window
 root = tk.Tk()
@@ -143,7 +162,7 @@ paned_window.pack(fill=tk.BOTH, expand=True)
 # Create a treeview in the left pane
 treeview = ttk.Treeview(paned_window)
 treeview.bind('<<TreeviewSelect>>', on_tree_select)
-paned_window.add(treeview, width=300)
+paned_window.add(treeview, width=200)
 
 # Create a scrollbar for the treeview
 scrollbar_treeview = ttk.Scrollbar(treeview, orient="vertical", command=treeview.yview)
@@ -177,9 +196,10 @@ edit_button = tk.Button(button_frame, text="Edit Node", command=edit_node)
 edit_button.pack(side=tk.LEFT)
 add_element_button = tk.Button(button_frame, text="Add New Element", command=add_new_element)
 add_element_button.pack(side=tk.LEFT)
+delete_button = tk.Button(button_frame, text="Delete Element", command=delete_selected_element)
+delete_button.pack(side=tk.LEFT)
 save_button = tk.Button(button_frame, text="Save XML File", command=save_file)
 save_button.pack(side=tk.RIGHT)
 
-text_positions = {}  # Global dictionary to map treeview text to positions in text_output
-
 root.mainloop()
+
