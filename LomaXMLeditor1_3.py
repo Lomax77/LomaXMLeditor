@@ -6,7 +6,7 @@
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk, PanedWindow
-import xml.etree.ElementTree as ET
+from lxml import etree as ET
 
 class NewElementDialog(tk.simpledialog.Dialog):
     def body(self, master):
@@ -47,16 +47,17 @@ def insert_new_element(tag, text):
     parent_id = selected_item[0] if selected_item else ''
     new_node_id = treeview.insert(parent_id, 'end', text=tag, open=True)
     treeview.insert(new_node_id, 'end', text=text, tags=('text',))
-    treeview_to_xml_mapping[new_node_id] = ET.Element(tag, text=text)
+    treeview_to_xml_mapping[new_node_id] = ET.Element(tag)
+    treeview_to_xml_mapping[new_node_id].text = text
     update_text_output(xml_tree.getroot())
 
 def browse_file():
     filename = filedialog.askopenfilename(filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
     if filename:
         global xml_tree
-        tree = ET.parse(filename)
-        xml_tree = tree
-        root = tree.getroot()
+        with open(filename, 'r') as file:
+            xml_tree = ET.parse(file)
+        root = xml_tree.getroot()
         clear_treeview()
         populate_treeview(root, '')
         update_text_output(root)
@@ -70,7 +71,7 @@ def populate_treeview(element, parent, text_pos=0, depth=0):
     treeview_to_xml_mapping[node_id] = element
     existing_tags.add(element.tag)
 
-    if element.text:
+    if element.text and element.text.strip():
         text = element.text.strip()
         text_id = treeview.insert(node_id, 'end', text=text, tags=('text',))
         start_pos = f'1.0+{text_pos}c'
@@ -89,11 +90,10 @@ def update_text_output(element):
     append_text_output(element)
 
 def append_text_output(element, depth=0):
-    if element.text:
+    if element.text and element.text.strip():
         text = element.text.strip()
-        if text:
-            text_output.insert(tk.END, text + '\n', 'blue_text')
-    
+        text_output.insert(tk.END, text + '\n', 'blue_text')
+
     for child in element:
         append_text_output(child, depth + 1)
 
@@ -103,11 +103,9 @@ def clear_treeview():
     treeview_to_xml_mapping.clear()
 
 def update_xml_element_from_treeview(item_id, new_text):
-    # Find the corresponding XML element
-    for elem in xml_tree.getroot().iter():
-        if elem.tag == treeview.item(item_id, "text"):
-            elem.text = new_text
-            break
+    xml_element = treeview_to_xml_mapping.get(item_id)
+    if xml_element is not None:
+        xml_element.text = new_text
 
 def edit_node():
     selected_item = treeview.selection()
@@ -122,13 +120,17 @@ def edit_node():
 
 def sync_treeview_to_xml(treeview_item_id, xml_parent_element):
     for child_id in treeview.get_children(treeview_item_id):
-        child_tag = treeview.item(child_id, "text")
-        child_element = ET.SubElement(xml_parent_element, child_tag)
-        sync_treeview_to_xml(child_id, child_element)
+        child_tag, child_text = treeview.item(child_id, "text"), treeview.item(child_id, "values")
+        if 'text' in treeview.item(child_id, 'tags'):
+            # This is a text node
+            xml_parent_element.text = child_text
+        else:
+            # This is an element node
+            child_element = ET.SubElement(xml_parent_element, child_tag)
+            sync_treeview_to_xml(child_id, child_element)
 
 def save_file():
     try:
-        # Clear the existing XML tree and rebuild it from the treeview
         root_element = xml_tree.getroot()
         root_element.clear()
         sync_treeview_to_xml("", root_element)
@@ -136,7 +138,7 @@ def save_file():
         save_path = filedialog.asksaveasfilename(defaultextension=".xml",
                                                  filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
         if save_path:
-            xml_tree.write(save_path)
+            xml_tree.write(save_path, pretty_print=True, xml_declaration=True, encoding="UTF-8")
             messagebox.showinfo("Success", f"File saved successfully to {save_path}")
     except Exception as e:
         messagebox.showerror("Error", f"Error saving file: {e}")
@@ -202,4 +204,5 @@ save_button = tk.Button(button_frame, text="Save XML File", command=save_file)
 save_button.pack(side=tk.RIGHT)
 
 root.mainloop()
+
 
