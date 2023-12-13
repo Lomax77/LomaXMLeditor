@@ -120,14 +120,19 @@ def edit_node():
 
 def sync_treeview_to_xml(treeview_item_id, xml_parent_element):
     for child_id in treeview.get_children(treeview_item_id):
-        child_tag, child_text = treeview.item(child_id, "text"), treeview.item(child_id, "values")
+        child_tag = treeview.item(child_id, "text")
         if 'text' in treeview.item(child_id, 'tags'):
             # This is a text node
-            xml_parent_element.text = child_text
+            xml_parent_element.text = child_tag
         else:
             # This is an element node
             child_element = ET.SubElement(xml_parent_element, child_tag)
             sync_treeview_to_xml(child_id, child_element)
+            # Handle text associated with the child element
+            if treeview.item(child_id, 'open'):
+                child_text = next((treeview.item(text_id, "text") for text_id in treeview.get_children(child_id) if 'text' in treeview.item(text_id, 'tags')), None)
+                if child_text:
+                    child_element.text = child_text
 
 def save_file():
     try:
@@ -204,5 +209,6 @@ save_button = tk.Button(button_frame, text="Save XML File", command=save_file)
 save_button.pack(side=tk.RIGHT)
 
 root.mainloop()
+
 
 
