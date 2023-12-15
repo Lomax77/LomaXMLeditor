@@ -28,6 +28,16 @@ class NewElementDialog(tk.simpledialog.Dialog):
         text = self.text_var.get()
         self.result = (tag, text)
 
+def register_all_namespaces(filename):
+    try:
+        namespaces = dict([node for _, node in ET.iterparse(filename, events=['start-ns'])])
+        for ns, uri in namespaces.items():
+            if ns:  # Only register non-empty prefixes
+                ET.register_namespace(ns, uri)
+    except ValueError as e:
+        print(f"Invalid tag name encountered: {ns}")
+        raise e
+        
 def add_new_element():
     tag_selection = list(existing_tags)
     if not tag_selection:
@@ -41,26 +51,6 @@ def add_new_element():
         new_tag, new_text = result
         if new_tag and new_text:
             insert_new_element(new_tag, new_text)
-
-def insert_new_element(tag, text):
-    selected_item = treeview.selection()
-    parent_id = selected_item[0] if selected_item else ''
-    new_node_id = treeview.insert(parent_id, 'end', text=tag, open=True)
-    treeview.insert(new_node_id, 'end', text=text, tags=('text',))
-    treeview_to_xml_mapping[new_node_id] = ET.Element(tag)
-    treeview_to_xml_mapping[new_node_id].text = text
-    update_text_output(xml_tree.getroot())
-
-def browse_file():
-    filename = filedialog.askopenfilename(filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
-    if filename:
-        global xml_tree
-        with open(filename, 'r') as file:
-            xml_tree = ET.parse(file)
-        root = xml_tree.getroot()
-        clear_treeview()
-        populate_treeview(root, '')
-        update_text_output(root)
 
 existing_tags = set()
 text_positions = {}  # Global dictionary to map treeview text to positions in text_output
@@ -107,17 +97,6 @@ def update_xml_element_from_treeview(item_id, new_text):
     if xml_element is not None:
         xml_element.text = new_text
 
-def edit_node():
-    selected_item = treeview.selection()
-    if selected_item:
-        item_id = selected_item[0]
-        current_text = treeview.item(item_id, 'text')
-        new_text = simpledialog.askstring("Edit text", "Enter new text:", initialvalue=current_text)
-        if new_text and new_text != current_text:
-            treeview.item(item_id, text=new_text)
-            update_xml_element_from_treeview(item_id, new_text)
-            update_text_output(xml_tree.getroot())
-
 def sync_treeview_to_xml(treeview_item_id, xml_parent_element):
     for child_id in treeview.get_children(treeview_item_id):
         child_tag = treeview.item(child_id, "text")
@@ -134,6 +113,56 @@ def sync_treeview_to_xml(treeview_item_id, xml_parent_element):
                 if child_text:
                     child_element.text = child_text
 
+def browse_file():
+    filename = filedialog.askopenfilename(filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
+    if filename:
+        register_all_namespaces(filename)  # Register all namespaces before parsing
+        global xml_tree
+        with open(filename, 'r') as file:
+            xml_tree = ET.parse(file)
+        root = xml_tree.getroot()
+        clear_treeview()
+        populate_treeview(root, '')
+        update_text_output(root)
+        
+def edit_node():
+    selected_item = treeview.selection()
+    if selected_item:
+        item_id = selected_item[0]
+        current_text = treeview.item(item_id, 'text')
+        new_text = simpledialog.askstring("Edit text", "Enter new text:", initialvalue=current_text)
+        if new_text and new_text != current_text:
+            treeview.item(item_id, text=new_text)
+            update_xml_element_from_treeview(item_id, new_text)
+            update_text_output(xml_tree.getroot())
+            
+def delete_selected_element():
+    selected_item = treeview.selection()
+    if selected_item:
+        item_id = selected_item[0]
+        treeview.delete(item_id)
+        del treeview_to_xml_mapping[item_id]
+        update_text_output(xml_tree.getroot())
+
+def get_original_namespaces(filename):
+    """
+    Parse the XML file and retrieve the original namespaces and their prefixes.
+    """
+    original_namespaces = {}
+    for event, elem in ET.iterparse(filename, events=('start-ns',)):
+        prefix, uri = elem
+        original_namespaces[uri] = prefix
+    return original_namespaces
+
+def set_original_namespaces(tree, original_namespaces):
+    """
+    Apply the original namespaces and prefixes to the tree.
+    """
+    for elem in tree.getiterator():
+        for uri, prefix in original_namespaces.items():
+            if elem.tag.startswith('{'+uri+'}'):
+                elem.tag = prefix + ':' + elem.tag.split('}', 1)[1]
+
 def save_file():
     try:
         root_element = xml_tree.getroot()
@@ -143,10 +172,24 @@ def save_file():
         save_path = filedialog.asksaveasfilename(defaultextension=".xml",
                                                  filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
         if save_path:
-            xml_tree.write(save_path, pretty_print=True, xml_declaration=True, encoding="UTF-8")
+            xml_str = ET.tostring(root_element, pretty_print=True, xml_declaration=True, encoding="UTF-8")
+            
+            # Here you can add logic to manipulate xml_str, for example, to remove namespace prefixes.
+
+            with open(save_path, 'wb') as file:
+                file.write(xml_str)
             messagebox.showinfo("Success", f"File saved successfully to {save_path}")
     except Exception as e:
         messagebox.showerror("Error", f"Error saving file: {e}")
+
+def insert_new_element(tag, text):
+    selected_item = treeview.selection()
+    parent_id = selected_item[0] if selected_item else ''
+    new_node_id = treeview.insert(parent_id, 'end', text=tag, open=True)
+    treeview.insert(new_node_id, 'end', text=text, tags=('text',))
+    treeview_to_xml_mapping[new_node_id] = ET.Element(tag)
+    treeview_to_xml_mapping[new_node_id].text = text
+    update_text_output(xml_tree.getroot())
 
 def on_tree_select(event):
     selected_items = treeview.selection()
@@ -209,6 +252,7 @@ save_button = tk.Button(button_frame, text="Save XML File", command=save_file)
 save_button.pack(side=tk.RIGHT)
 
 root.mainloop()
+
 
 
 
